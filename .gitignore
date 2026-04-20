@@ -1,0 +1,57 @@
+# macOS
+.DS_Store
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build/distribution artifacts
+build/
+dist/
+*.egg-info/
+
+# Virtual environments (any style)
+.venv/
+venv/
+env/
+ENV/
+.env.example
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs and runtime dumps
+*.log
+
+# LaTeX temporary/build files
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.idx
+*.ilg
+*.ind
+*.lof
+*.log
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+
+#report
+report_template.md
+report_template.tex
+
+#data
+*.csv

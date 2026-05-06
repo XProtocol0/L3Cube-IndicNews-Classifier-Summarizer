@@ -1,5 +1,6 @@
 import html
 import json
+import logging
 import os
 import random
 import re
@@ -8,6 +9,13 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Dict, List, Optional
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("india_briefing")
 
 import feedparser
 import pandas as pd
@@ -58,6 +66,10 @@ MISTRAL_MIN_INTERVAL = 60.0 / max(MISTRAL_RPM, 1)
 _MISTRAL_LAST_CALL = 0.0
 _MISTRAL_DAY_KEY = ""
 _MISTRAL_DAY_COUNT = 0
+
+# DeepSeek fallback (OpenAI-compatible)
+DEEPSEEK_API_URL = os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/v1/chat/completions")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
 
 def _clean_text(text: str) -> str:
@@ -465,19 +477,89 @@ def _mistral_generate_with_backoff(api_key: str, prompt: str, max_retries: int =
             time.sleep(backoff)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+# ---------------------------------------------------------------------------
+# DeepSeek fallback (OpenAI-compatible API)
+# ---------------------------------------------------------------------------
+def _deepseek_chat_completion(api_key: str, prompt: str) -> str:
+    """Call DeepSeek chat completions endpoint (OpenAI-compatible)."""
+    if requests is None:
+        raise RuntimeError("DeepSeek summaries are not available. Install requests.")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are an editor for an Indian daily news briefing app.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+    }
+    response = requests.post(
+        DEEPSEEK_API_URL,
+        headers=headers,
+        data=json.dumps(payload),
+        timeout=90,
+    )
+    if not response.ok:
+        raise RuntimeError(f"DeepSeek API error {response.status_code}: {response.text}")
+    data = response.json()
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("DeepSeek API response missing content.") from exc
+
+
+def _llm_generate(mistral_key: str, deepseek_key: str, prompt: str) -> str:
+    """Try Mistral first; on any error fall back to DeepSeek."""
+    last_exc: Optional[Exception] = None
+
+    # --- Mistral attempt ---
+    if mistral_key:
+        try:
+            result = _mistral_generate_with_backoff(mistral_key, prompt)
+            logger.info("[LLM] ✅ Mistral responded successfully (model=%s)", MISTRAL_MODEL)
+            return result
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "[LLM] ⚠️  Mistral failed (%s). Falling back to DeepSeek…", exc
+            )
+            st.toast(f"⚠️ Mistral failed ({exc}). Falling back to DeepSeek…", icon="🔄")
+
+    # --- DeepSeek fallback ---
+    if deepseek_key:
+        try:
+            result = _deepseek_chat_completion(deepseek_key, prompt)
+            logger.info("[LLM] ✅ DeepSeek responded successfully (model=%s)", DEEPSEEK_MODEL)
+            return result
+        except Exception as exc:
+            last_exc = exc
+            logger.error("[LLM] ❌ DeepSeek also failed: %s", exc)
+
+    logger.error("[LLM] ❌ Both Mistral and DeepSeek failed. Last error: %s", last_exc)
+    raise RuntimeError(
+        f"Both Mistral and DeepSeek failed. Last error: {last_exc}"
+    )
+
+
 def summarize_articles_batch(
     articles: List[Dict],
-    api_key: str,
+    mistral_key: str,
+    deepseek_key: str,
     require_llm: bool = False,
 ) -> List[str]:
     if not articles:
         return []
-    if not api_key or requests is None:
+    has_llm = (mistral_key or deepseek_key) and requests is not None
+    if not has_llm:
         if require_llm:
             raise RuntimeError(
-                "Mistral summaries are not available. Check your API key and "
-                "ensure requests is installed."
+                "No LLM API key available. Provide a Mistral or DeepSeek key."
             )
         return [
             _fallback_summary(article.get("description", "") or article.get("title", ""))
@@ -505,10 +587,10 @@ def summarize_articles_batch(
             "Keep the same order and ids.\n\n"
             f"Items: {payload}"
         )
-        text = _mistral_generate_with_backoff(api_key, prompt)
+        text = _llm_generate(mistral_key, deepseek_key, prompt)
         json_text = _normalize_json_payload(text)
         if not json_text:
-            raise ValueError("Empty JSON payload from Mistral response.")
+            raise ValueError("Empty JSON payload from LLM response.")
         data = json.loads(json_text)
 
         summaries_by_id = {}
@@ -534,7 +616,7 @@ def summarize_articles_batch(
     except Exception as exc:
         if require_llm:
             raise RuntimeError(
-                f"Mistral batch summary failed. Please verify your API key and quota. ({exc})"
+                f"LLM batch summary failed. Both Mistral and DeepSeek may be unavailable. ({exc})"
             ) from exc
         return [
             _fallback_summary(article.get("description", "") or article.get("title", ""))
@@ -546,16 +628,17 @@ def summarize_articles_batch(
 def summarize_article(
     title: str,
     description: str,
-    api_key: str,
+    mistral_key: str,
+    deepseek_key: str,
     require_llm: bool = False,
 ) -> str:
     details = description or title
     context = f"Title: {title}\nDetails: {details}"
-    if not api_key or requests is None:
+    has_llm = (mistral_key or deepseek_key) and requests is not None
+    if not has_llm:
         if require_llm:
             raise RuntimeError(
-                "Mistral summaries are not available. Check your API key and "
-                "ensure requests is installed."
+                "No LLM API key available. Provide a Mistral or DeepSeek key."
             )
         return _fallback_summary(description or title)
 
@@ -565,13 +648,13 @@ def summarize_article(
             "Each line should be <= 22 words and fact-focused.\n\n"
             f"{context}"
         )
-        text = _mistral_generate_with_backoff(api_key, prompt)
+        text = _llm_generate(mistral_key, deepseek_key, prompt)
         text = _clean_summary_text(text)
         return text if text else _fallback_summary(description or title)
     except Exception as exc:
         if require_llm:
             raise RuntimeError(
-                f"Mistral summary failed. Please verify your API key and quota. ({exc})"
+                f"LLM summary failed. Both Mistral and DeepSeek may be unavailable. ({exc})"
             ) from exc
         return _fallback_summary(description or title)
 
@@ -605,23 +688,24 @@ def build_newsletter_fallback(
     return "\n".join(lines)
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
 def build_newsletter_with_llm(
     selected_articles: List[Dict],
-    api_key: str,
+    mistral_key: str,
+    deepseek_key: str,
     recipient_name: str,
-    tone: str,
     max_articles: int,
     force_llm: bool = True,
 ) -> str:
-    if not api_key or requests is None:
+    has_llm = (mistral_key or deepseek_key) and requests is not None
+    if not has_llm:
         return build_newsletter_fallback(recipient_name, selected_articles, max_articles)
 
     try:
         batch_articles = selected_articles[:max_articles]
         summaries = summarize_articles_batch(
             batch_articles,
-            api_key,
+            mistral_key,
+            deepseek_key,
             require_llm=True,
         )
         enriched_articles = []
@@ -660,13 +744,35 @@ def main():
         st.header("Configuration")
         if "article_source" not in st.session_state:
             st.session_state.article_source = "rss"
-        user_api_key = st.text_input(
+
+        st.subheader("LLM API Keys")
+        user_mistral_key = st.text_input(
             "Mistral API Key (optional)",
             value="",
             type="password",
-            help="Optional. If left blank, the server environment key is used (if set).",
+            help="Primary LLM for summaries. Falls back to DeepSeek on error.",
         ).strip()
-        api_key = user_api_key or os.getenv("MISTRAL_AI_API_KEY", "").strip()
+        user_deepseek_key = st.text_input(
+            "DeepSeek API Key (optional)",
+            value="",
+            type="password",
+            help="Fallback LLM used when Mistral is unavailable or returns an error.",
+        ).strip()
+        mistral_key = user_mistral_key or os.getenv("MISTRAL_AI_API_KEY", "").strip()
+        deepseek_key = user_deepseek_key or os.getenv("DEEPSEEK_API_KEY", "").strip()
+
+        # Legacy: keep a unified `api_key` alias for any downstream code
+        api_key = mistral_key or deepseek_key
+
+        # Show which providers are active
+        active = []
+        if mistral_key:
+            active.append("✅ Mistral")
+        if deepseek_key:
+            active.append("✅ DeepSeek (fallback)")
+        if not active:
+            active.append("⚠️ No LLM key — using local summaries")
+        st.caption(" | ".join(active))
         article_limit = st.slider("Articles per refresh", min_value=10, max_value=50, value=30, step=5)
         st.subheader("News Source")
         uploaded_csv = st.file_uploader(
@@ -739,7 +845,7 @@ def main():
                 st.divider()
 
     st.subheader("Personalized Newsletter Generator")
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col1, col2 = st.columns([2, 2])
     with col1:
         recipient_name = st.text_input("Recipient name", value="Reader")
     with col2:
@@ -748,8 +854,6 @@ def main():
             options=tab_order,
             default=tab_order,
         )
-    with col3:
-        tone = st.selectbox("Tone", options=["Professional", "Friendly", "Concise"], index=0)
 
     selected_articles = [a for a in articles if a["category"] in selected_categories]
 
@@ -757,9 +861,9 @@ def main():
         try:
             digest = build_newsletter_with_llm(
                 selected_articles,
-                api_key,
+                mistral_key,
+                deepseek_key,
                 recipient_name,
-                tone,
                 max_articles=article_limit,
                 force_llm=True,
             )

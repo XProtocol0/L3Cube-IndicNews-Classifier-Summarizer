@@ -1,0 +1,714 @@
+Personalised Newsletter Generator:
+Zero-Shot Indian News Classification and LLM-Based
+Summarisation
+KSPSVLN Siddardha Kumar Kavuri (2025201061)
+Piyush Kumar Agarwal (2025201082)
+Sankalp Chaturvedi (2025201083)
+Aviral Tyagi (2025201086)
+
+Abstract
+
+training data is required at inference time.
+• Real-time freshness. The pipeline reads live RSS
+feeds and refreshes on every page load.
+
+We present a personalised daily newsletter generator for
+Indian news consumers. The system ingests live RSS
+feeds from The Hindu, NDTV, and The Indian Express;
+tags each article with one of six L3Cube-IndicNewsstyle categories using a zero-shot classifier built on
+facebook/bart-large-mnli; produces a three-line
+factual summary for each article using the free-tier Mistral mistral-small chat API; and finally assembles a
+category-filtered, recipient-personalised email digest. We
+evaluate the classifier on the full 5471-headline filtered
+subset of the India Headlines dataset and report a baseline accuracy of 0.7044 and macro-F1 of 0.6903 over six
+categories. We further conduct a prompt-tuning ablation
+across ten hypothesis templates and two label vocabularies, achieving a peak accuracy of 0.7428 with a domainanchored template (“This Indian news headline covers
+{}.”) without retraining the underlying NLI model. The
+application is deployed as a Streamlit Space on Hugging
+Face.
+
+1
+
+• Reproducibility on free tiers. The classifier runs locally via the Hugging Face transformers pipeline;
+summarisation uses Mistral’s free mistral-small
+endpoint, with deterministic rate-limiting and exponential back-off.
+• Auditability. Every prediction carries a confidence
+score, and the entire prompt and category vocabulary
+live in version-controlled flat files.
+Contributions. (1) We engineer an end-to-end Streamlit
+application that bridges feed-parsing, NLI-based zero-shot
+classification, and LLM summarisation under realistic freetier rate limits. (2) We re-evaluate bart-large-mnli
+on Indian news headlines using L3Cube-IndicNews-aligned
+labels and report per-class metrics on the full 5471-row
+evaluation corpus. (3) We present a ten-template prompttuning ablation that lifts accuracy by +3.84 percentage
+points (a +5.5% relative gain) over the most natural English baseline. The prompt search is the only “training”
+performed.
+
+Introduction
+
+The volume of news produced by Indian outlets each day
+far exceeds what an individual reader can comfortably scan.
+Aggregators that surface headlines without curation force
+readers to triage by themselves, and traditional editorial
+newsletters are slow, expensive to produce, and rarely personalised at the article level. Recent advances in zero-shot
+classification and instruction-tuned large language models
+(LLMs) make it possible to assemble a fully automated
+pipeline that (i) discovers fresh articles, (ii) tags them by
+topic, (iii) summarises them, and (iv) renders a personalised
+digest – all without supervised fine-tuning data.
+This report describes such a pipeline, named the India
+Daily Briefing. Its design goals are:
+
+Live demo. Hugging Face Space
+Source code. GitHub Repository
+Demo video. Google Drive Video
+
+2
+
+Related Work
+
+Zero-shot text classification via NLI. Yin et al. [3]
+demonstrated that off-the-shelf NLI models such as
+BART/RoBERTa fine-tuned on MultiNLI [2] can score arbitrary candidate labels by treating each label as a hypothesis. The facebook/bart-large-mnli checkpoint
+we use stems from BART [1] and forms the backbone of
+
+• Zero supervision. No category-labelled in-domain
+1
+
+Table 1: Class distribution of the filtered evaluation set
+(N =5471).
+
+many production zero-shot pipelines exposed by Hugging
+Face’s transformers library [8].
+Indic news classification. The L3Cube-IndicNews corpus [4] provides labelled news headlines and articles across
+multiple Indian languages and a flat taxonomy that closely
+matches our six-category vocabulary. We adopt that taxonomy verbatim while restricting ourselves to Englishlanguage feeds in this prototype.
+News summarisation with LLMs. Recent instructiontuned chat models reach near-human extractive summary
+quality on short news inputs without any task-specific finetuning. We use mistral-small-latest via the Mistral chat-completions API [5] as a low-cost alternative to
+GPT-4-class systems.
+News aggregator UIs. Streamlit [6] has emerged as a standard rapid-prototyping framework for ML demos; it is well
+suited to a stateful, single-user briefing application.
+
+3
+
+Data
+
+3.1
+
+Live inference data
+
+Category
+
+At inference time, the application pulls 12 RSS feeds
+(four sections each from The Hindu, NDTV, and The
+Indian Express; see FEED URLS in app.py). Entries are de-duplicated by URL or title, parsed for
+publication time using feedparser together with
+email.utils.parsedate to datetime, sorted by
+recency, and trimmed to the user-selected limit (default
+30). The free-text fields are stripped of HTML and entitydecoded before being passed to the classifier and summariser. The user may also upload a local CSV with flexible column names (title, headline, description,
+published, etc.) which is mapped onto the same schema
+by load articles from csv.
+
+3.2
+
+Evaluation dataset
+
+3.3
+
+Pre-processing
+
+# Headlines
+
+Sports
+Technology
+Entertainment
+Crime
+Business
+Politics
+
+1000
+1000
+1000
+1000
+1000
+471
+
+Total
+
+5471
+
+Figure 1: End-to-end pipeline of the India Daily Briefing:
+RSS / CSV ingest → pre-processing → BART-MNLI zeroshot tagging → Mistral 3-line summary → Streamlit UI and
+digest assembly.
+lapsing. Summaries additionally preserve paragraph structure (\n\n) while collapsing other whitespace. We discard
+rows whose title field is empty or whose label is not in Y.
+
+4
+
+Method
+
+4.1
+
+System architecture
+
+Figure 1 (placeholder) summarises the pipeline. The app
+For
+offline
+evaluation
+we
+use
+the
+Inis structured as a single-process Streamlit application with
+dia
+Headlines
+News
+Dataset
+(Kaggle,
+caching at three layers (cache resource for the heavy
+therohk/india-headlines-news-dataset).
+classifier, cache data for both feed fetches and sumWe
+supply
+a
+curated
+subset,
+maries) so that repeated user interactions remain respondata/filtered data1.csv,
+containing
+5471
+sive.
+headlines drawn from six L3Cube-aligned categories.
+Class distribution after filtering against labels.txt is
+4.2 Zero-shot classification
+shown in Table 1.
+The
+category
+vocabulary
+itself,
+Y
+=
+We treat news categorisation as a textual entailment prob{Business, Crime, Entertainment, Politics, Sports, Technology},lem and use facebook/bart-large-mnli as the
+is stored in labels.txt and consumed by both the ofscorer. For an input headline x and a candidate category
+fline notebook and the live application – ensuring a single
+y ∈ Y, the classifier scores
+source of truth for the label space.
+P (entailment | premise = x, hypothesis = T (y))
+where T (·) is a hypothesis template. The default template
+used in the deployed app is the article-level form
+
+Text is canonicalised by (i) HTML-entity decoding, (ii) tag
+stripping via a non-greedy regex, and (iii) whitespace col-
+
+T (y) = “This news article is about y.”
+2
+
+Table 2:
+Per-class zero-shot performance with
+template P2: “This headline is about {}.”
+on
+the full 5471-row evaluation corpus.
+Source:
+notebooks/training and ablation.ipynb.
+
+We softmax across Y and take the argmax label together
+with its score, exposed to the user as zero-shot confidence.
+The same configuration is used for both RSS articles (where
+title and description are concatenated) and CSV-derived
+rows.
+
+Class
+
+4.3
+
+LLM-based summarisation
+
+For each article we request a three-line, ≤ 22words-per-line, fact-focused summary in plain text from
+Mistral’s mistral-small-latest model via the
+/v1/chat/completions endpoint. To survive Mistral’s free-tier limits we implement two safeguards in
+app.py:
+throttle mistral
+• Token-bucket throttling.
+enforces a per-minute floor of 60/RPM seconds between calls and a per-day counter (MISTRAL RPD)
+that raises a hard error before quota exhaustion.
+
+4.6
+
+To minimise total API calls, we issue batched summarisation requests: all articles for the digest are packed into
+a single JSON payload and the model is asked to return a
+JSON array of {id, summary} objects. The response is
+robustly parsed by normalize json payload, which
+strips Markdown fences, removes trailing commas, and
+escapes raw newlines inside string literals. If the LLM
+is unreachable or its response is malformed, we fall
+back to a deterministic three-sentence extractive summary
+( fallback summary) so that the UI degrades gracefully.
+
+4.7
+
+F1
+
+Sup.
+
+Business
+Crime
+Entertainment
+Politics
+Sports
+Technology
+
+0.6084
+0.7036
+0.7544
+0.5143
+0.8563
+0.7374
+
+0.6960
+0.7810
+0.7370
+0.5350
+0.7030
+0.6850
+
+0.6493
+0.7403
+0.7456
+0.5245
+0.7721
+0.7102
+
+1000
+1000
+1000
+471
+1000
+1000
+
+Macro avg.
+Weighted avg.
+
+0.6957
+0.7133
+
+0.6895
+0.7044
+
+0.6903
+0.7064
+
+5471
+5471
+
+Caching strategy
+
+Failure handling
+
+The pipeline is designed so that no single component can
+take the page down. If the RSS endpoints time out,
+feedparser returns empty entries and the user sees an
+explicit error. If the Mistral key is absent or the API errors out beyond the back-off budget, the deterministic threesentence extractive fallback ( fallback summary) is invoked transparently. JSON parsing failures from the LLM
+trigger a per-article fallback through the same path. The
+classifier itself is the only hard dependency: in the unlikely
+event of a model-load failure, the app surfaces the exception
+in the Streamlit UI rather than masking it.
+
+Newsletter assembly
+
+The Streamlit UI exposes a recipient name, a
+multi-select of categories, and a tone selector.
+filters
+classified
+build newsletter with llm
+articles by selected category, summarises them in a single
+batch, and renders a plain-text email body with subject
+line, greeting, numbered article block (title, category,
+source, three-line summary), and sign-off. The fallback
+path produces an identical structure offline.
+
+4.5
+
+R
+
+Three layers of caching keep the application responsive
+even on a single CPU worker. First, the BART-MNLI
+checkpoint is wrapped in @st.cache resource so
+it is loaded exactly once per process. Second, RSS
+fetches are cached with @st.cache data(ttl=900)
+– fresh for fifteen minutes – which mirrors typical
+RSS update cadences and keeps Streamlit reruns nearinstant. Third, both summarize articles batch and
+summarize article are cached with a one-hour TTL,
+so re-rendering a digest with the same articles costs zero
+Mistral calls.
+
+• Exponential back-off with jitter. On any error
+whose message matches {429, rate limit, quota, . . . },
+mistral generate with backoff retries up
+to five times with delay 2a + U (0.2, 0.8) seconds at
+attempt a.
+
+4.4
+
+P
+
+Implementation
+
+5
+
+Results
+
+5.1
+
+Overall classification quality
+
+We evaluate bart-large-mnli on the entire filtered evaluation corpus of 5471 headlines drawn from
+filtered data1.csv. With the deployed-app template (“This headline is about {}.”, P2) the model achieves
+an overall accuracy of 0.7044, macro-F1 of 0.6903, and
+weighted-F1 of 0.7064. Per-class metrics are summarised
+in Table 2.
+
+The application is ∼780 lines of Python, deployed as
+a Hugging Face Space backed by Streamlit. Configuration is environment-driven (MISTRAL API URL,
+MISTRAL MODEL, MISTRAL RPM, MISTRAL RPD,
+MISTRAL AI API KEY). Users may override the serverside key by entering their own in the sidebar.
+3
+
+Table 3: Confusion matrix for P2 on the full 5471-row corpus. Rows = true class, columns = predicted.
+
+Business
+Crime
+Entertainment
+Politics
+Sports
+Technology
+
+Bus
+
+Cri
+
+Ent
+
+Pol
+
+Spo
+
+Tec
+
+696
+48
+42
+28
+93
+237
+
+55
+781
+123
+61
+64
+26
+
+37
+21
+737
+85
+67
+30
+
+58
+93
+29
+252
+46
+12
+
+15
+25
+43
+25
+703
+10
+
+139
+32
+26
+20
+27
+685
+
+Figure 3: Personalised newsletter generator (RSS mode),
+part 1: recipient name, category multi-select, tone control,
+and the top of the generated digest.
+
+Figure 2: Homepage in Live RSS mode: sidebar configuration (Mistral key, article limit, source toggle, refresh)
+alongside the category-tabbed news feed.
+
+5.2
+
+Figure 4: Personalised newsletter generator (RSS mode),
+part 2: continuation of the digest body showing per-article
+3-line Mistral summaries.
+
+Screenshots of the deployed application
+
+Figures 2–7 show representative views of the live system
+in both modes. Figures 2–4 cover the default Live RSS
+mode, while Figures 5–7 demonstrate the Local CSV mode
+in which the user uploads a headline file.
+
+6
+
+to +3.84 points. Anchoring narrows the entailment
+distribution toward the relevant domain.
+
+Ablation Study
+
+2. Strong action verbs beat copular forms. “covers”
+(P3) and “focuses on” (P7) – verbs that are journalistically natural and create stronger NLI entailment signals – top the table. The non-anchored “This news
+article is about {}.” (P0, 0.7187) is interestingly
+stronger than the deployed shorter form P2 (0.7044),
+suggesting that even a weak anchor (“news article” vs.
+bare “headline”) carries information.
+
+The behaviour of an MNLI-based zero-shot classifier is
+highly sensitive to the wording of the hypothesis template
+T (y). We therefore conduct a prompt-tuning ablation over
+ten templates that systematically vary along four axes: (i)
+the presence of a domain anchor (“Indian”, “news”); (ii)
+the entailment verb (“is about” vs. “covers”, “focuses on”,
+“reports on”); (iii) categorical framing (“belongs to the {}
+category”, “filed under the {} section”); and (iv) label vocabulary – short labels vs. expanded labels (e.g. “Technology” → “science and technology”). Templates P8 and P9
+use the expanded vocabulary; predictions are mapped back
+to the canonical labels for a fair comparison. All other settings (model, N =500 test rows, single-label argmax) are
+held fixed.
+The best template, P3 (“This Indian news headline covers {}.”), reaches 0.7428 accuracy – a relative improvement
+of +5.5% over the deployed baseline P2 (+3.84 absolute
+percentage points). Three trends emerge:
+
+3. Naive label expansion hurts the most. Although
+P8/P9 were designed to disambiguate Technology
+from Business, multi-word labels (“science and technology”, “business and economy”) shift the entailment distribution and end up worst of all ten prompts
+(-3.8 to -4.2 points vs. baseline; -8 points vs. best).
+Expanded labels appear to dilute the entailment signal
+across the wider phrase rather than concentrating it on
+the topical core, and would likely require a per-class
+calibration step.
+The spread between the best (P3, 0.7428) and the worst
+(P8, 0.6624) templates is ∆ = 0.0804 – nearly four times
+the gap between P3 and the deployed P2. This underscores
+that hypothesis-template choice is, in zero-shot NLI, easily
+
+1. Domain anchoring helps. The two top-ranked templates (P3, P7) and P1 all contain the explicit “Indian” anchor and beat the deployed baseline by +1.9
+4
+
+Figure 7: Digest generated from CSV input, part 2.
+
+Figure 5: Homepage in Local CSV mode: an uploaded CSV
+is parsed by load articles from csv, then classified
+and tabbed exactly like RSS items.
+
+Table 4: Prompt-tuning ablation. Accuracy on the full
+5471-row corpus; sorted descending.
+ID
+
+Template
+
+P3
+P7
+P1
+
+This Indian news headline covers {}.
+This Indian news headline focuses on {}.
+The primary topic of this Indian headline is
+{}.
+This headline belongs to the {} category.
+This news article is about {}.
+This Indian headline reports on {}.
+This headline is about {}. (deployed baseline)
+This article is filed under the {} section.
+This Indian news headline focuses on the topic
+of {}.†
+The subject of this Indian headline is {}.†
+
+P4
+P0
+P5
+P2
+P6
+P9
+P8
+
+Figure 6: Digest generated from CSV input, part 1.
+
+Acc.
+0.7428
+0.7333
+0.7233
+0.7222
+0.7187
+0.7094
+0.7044
+0.6975
+0.6626
+0.6624
+
+† Uses expanded label vocabulary.
+
+as important as model choice for accuracy purposes.
+
+7
+
+and platform-launch stories sit on the boundary between
+the two classes; lexical cues such as “company”, “launch”,
+and “market” pull both ways. This bidirectional confusion
+explains why both Technology recall (0.6850) and Business precision (0.6084) sit at the bottom of their respective
+columns despite otherwise reasonable scores.
+
+Analysis of Notebook Evaluation
+
+We
+discuss
+what
+the
+offline
+notebook
+(notebooks/training and ablation.ipynb)
+reveals about the classifier’s failure modes.
+
+Entertainment → Crime leakage. A third notable error mass is Entertainment → Crime (123): Bollywood
+scandals, defamation suits, and substance-use stories are
+filed under Entertainment in the dataset but their lexicons
+strongly entail Crime. This is a labelling-convention issue
+rather than a model failure.
+
+Politics is still the hardest class – but markedly improved. With only 471 true Politics headlines in the corpus and an F1 of 0.5245, Politics remains the dominant
+source of macro-F1 drag, although the larger evaluation set
+surfaces a noticeably higher score than the earlier 500-row
+pilot (0.4250). Table 3 shows Politics being mis-routed
+outwards principally into Entertainment (85 headlines) and
+Crime (61), with smaller leakage into Business (28) and
+Sports (25). Headlines about politicians frequently overlap
+topically with celebrity coverage and law-and-order stories,
+and the NLI model has no calibration prior toward the Politics label.
+
+Sports remains the easiest class. Sports has the highest precision (0.8563) and F1 (0.7721). The vocabulary of
+cricket, hockey, and tournament names provides strong, almost unambiguous signal to the NLI model – the prior expectation is borne out empirically. The recall drop relative
+to the 500-row pilot (0.7442 → 0.7030) is consistent with
+the larger sample exposing more borderline cases (sportsbusiness overlap, sports-politics overlap such as IOA elections).
+
+Technology and Business are bidirectionally confused.
+The single largest off-diagonal cell in Table 3 is Technology → Business (237 misclassifications), and the symmetric cell Business → Technology (139) is the secondlargest off-diagonal mass overall. Start-up funding, IPO,
+
+Class imbalance vs. confusion. Looking at macro vs.
+weighted averages, weighted-F1 (0.7064) is only modestly
+5
+
+Shallow context. BART-MNLI only sees title + RSS description; it does not fetch and read full article bodies. This
+caps achievable accuracy on borderline examples.
+Summarisation evaluation. We report no automatic
+ROUGE/BERTScore numbers for the Mistral summaries;
+quality is judged manually in this report. A larger-scale,
+reference-based evaluation would require curated gold summaries that the dataset does not provide.
+Evaluation sample size. Reported numbers are computed
+over the full N =5471 headline corpus. At this scale a 95%
+confidence interval on accuracy is approximately ±1.2 percentage points, so the gap between P3 (0.7428) and P7
+(0.7333) is borderline-significant while the gap between P3
+and P2 (0.7044) is clearly significant. The two expandedlabel prompts (P8, P9) are unambiguously worse.
+Free-tier rate limits. The Mistral free tier caps RPM and
+RPD; under bursty load the throttler will simply slow the
+digest generation. Switching to a paid tier or a self-hosted
+model is a deployment-level change only.
+
+higher than macro-F1 (0.6903). Because the five nonPolitics classes are perfectly balanced (1000 each), the imbalance contribution to the macro/weighted gap is small;
+the gap is now almost entirely a within-class confusion effect concentrated in Business/Technology and Politics, not
+a support effect.
+Confidence as a triage signal. Each prediction comes
+with a softmax-style score that the UI surfaces verbatim.
+A spot-check shows that articles with confidence below
+∼ 0.45 are disproportionately the ones that motivate the
+off-diagonal mass in Table 3. A future iteration could either
+route low-confidence articles through a secondary classifier
+or simply suppress them from the digest.
+Qualitative inspection of summaries. Although we do
+not report ROUGE numbers, manual inspection of ∼ 50
+generated summaries indicates that mistral-small respects the three-line, ≤ 22-words/line, plain-text constraint
+roughly 96% of the time. The most common deviation is a
+four-line response when the underlying article carries multiple distinct facts; the JSON parsing path tolerates this without UI breakage. Hallucinated facts are rare on short RSS
+bodies but cannot be ruled out – another argument for treating digest summaries as triage rather than authoritative.
+
+9
+
+We
+thank
+the
+maintainers
+of
+facebook/bart-large-mnli and the Hugging
+Face transformers library, the Mistral AI team for
+free API access to mistral-small, and the L3CubePune group whose IndicNews label schema informed our
+category vocabulary. The evaluation corpus is derived
+from Rohit Kulkarni’s India Headlines News Dataset on
+Kaggle. We also acknowledge The Hindu, NDTV, and The
+Indian Express for providing public RSS feeds that make a
+real-time prototype possible. This work was undertaken as
+part of the SMAI course assignment (Assignment 3).
+
+Implication for prompt design. Our ablation gain
+(+3.84 pts overall) is most plausibly attributable
+to improvements on the three error clusters above:
+Business↔Technology
+bidirectional
+confusion,
+Entertainment→Crime leakage, and Politics fragmentation. The P3 template’s domain anchor (“Indian news
+headline”) plus the journalistic verb “covers” appears to
+tighten the entailment signal toward topical core nouns and
+away from peripheral name-entity overlap. A per-class
+breakdown of the ablation is left to future work, but Table 4
+already shows that even the worst expanded-label prompt
+is only −4 points below the best, suggesting the confusion
+structure itself – not the prompt – is the primary remaining
+source of error.
+
+8
+
+Acknowledgements
+
+References
+References
+[1] M. Lewis, Y. Liu, N. Goyal, M. Ghazvininejad, A. Mohamed, O. Levy, V. Stoyanov, L. Zettlemoyer. BART: Denoising Sequence-to-Sequence Pre-training for Natural Language
+Generation, Translation, and Comprehension. ACL, 2020.
+
+Limitations
+
+[2] A. Williams, N. Nangia, S. Bowman. A Broad-Coverage
+Challenge Corpus for Sentence Understanding through Inference. NAACL-HLT, 2018.
+
+Single-label assumption.
+Our classifier returns the
+argmax over Y. Many real Indian headlines are inherently multi-topic (politics-and-crime, sports-and-business).
+The deployed UI surfaces only the top label and
+its confidence; multi-label reporting is straightforward
+(multi label=True) but was kept off to match
+L3Cube-IndicNews semantics.
+Label-space ceiling. labels.txt contains six categories. RSS articles outside this universe (e.g. Health, Education) are forced into the closest available bucket and inflate per-class noise.
+
+[3] W. Yin, J. Hay, D. Roth. Benchmarking Zero-shot Text Classification: Datasets, Evaluation and Entailment Approach.
+EMNLP-IJCNLP, 2019.
+[4] R. Joshi.
+L3Cube-IndicNews: News-based Short and
+Long Document Classification Datasets in Indic Languages.
+arXiv:2401.02254, 2024.
+[5] Mistral AI. Mistral Small Documentation.
+docs.mistral.ai/, accessed 2026.
+
+6
+
+https://
+
+[6] Streamlit Inc. Streamlit: A faster way to build and share data
+apps. https://streamlit.io, accessed 2026.
+[7] R. Kulkarni. India Headlines News Dataset. Kaggle.
+https://www.kaggle.com/datasets/therohk/
+india-headlines-news-dataset.
+[8] T. Wolf et al. Transformers: State-of-the-Art Natural Language Processing. EMNLP: System Demonstrations, 2020.
+
+7
+
+

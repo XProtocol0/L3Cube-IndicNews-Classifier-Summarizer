@@ -1,6 +1,6 @@
 # Daily Briefing App (India News)
 
-Streamlit app that fetches live Indian news from RSS, classifies each article into one of 5 categories with zero-shot NLP, and generates a 3-line summary per article.
+Streamlit app that fetches live Indian news from RSS, classifies each article into one of six categories with zero-shot NLP, and generates a 3-line summary per article.
 
 ## Features
 
@@ -10,13 +10,15 @@ Streamlit app that fetches live Indian news from RSS, classifies each article in
   - Indian Express
 - Zero-shot category classification using `facebook/bart-large-mnli`
 - Category tabs:
+  - Business
+  - Crime
+  - Entertainment
   - Politics
   - Sports
-  - Tech
-  - Business
-  - Entertainment
+  - Technology
 - 3-line article summaries using Mistral API (with fallback summarizer)
 - Personalized newsletter generator (email style digest)
+- Local CSV upload mode with flexible column mapping
 - Streamlit caching for faster repeated loads
 
 ## Project Structure
@@ -24,6 +26,7 @@ Streamlit app that fetches live Indian news from RSS, classifies each article in
 - `app.py`: Streamlit app (RSS + classifier + summary + newsletter)
 - `requirements.txt`: Python dependencies
 - `notebooks/training_and_ablation.ipynb`: training/evaluation notebook
+- `report/report_final.pdf`: final report
 - `report/report_template.md`: technical report draft scaffold
 - `.streamlit/config.toml`: Streamlit runtime + theme config
 
@@ -60,8 +63,8 @@ streamlit run app.py
 - Model: `facebook/bart-large-mnli`
 - Task: Zero-shot single-label classification
 - Candidate labels:
-  - Defaults to `Politics`, `Sports`, `Technology`, `Business`, `Entertainment`
-  - If `labels.txt` exists, labels are loaded from that file
+  - If `labels.txt` exists, labels are loaded from that file (default: Business, Crime, Entertainment, Politics, Sports, Technology)
+  - If `labels.txt` is missing, the app falls back to 5 default categories
 - Display mapping: `Technology -> Tech` (defaults only)
 
 ### Summarization
@@ -70,6 +73,7 @@ streamlit run app.py
 - Prompt constraint: exactly 3 concise lines
 - Fallback: sentence-based heuristic summarizer
 - Batch mode: all selected articles are summarized in a single request for the email digest
+- Rate limiting: per-minute throttling and per-day quota guards with exponential backoff
 
 ## Caching
 
@@ -103,6 +107,14 @@ Place CSV at:
 
 (adjust path/column names if your copy differs)
 
+## Results (from report_final.pdf)
+
+- Evaluation set: 5,471 headlines filtered to six categories
+- Baseline (template: "This headline is about {}.")
+  - Accuracy: 0.7044
+  - Macro-F1: 0.6903
+- Best prompt template: "This Indian news headline covers {}." (accuracy 0.7428)
+
 ## Environment Variables
 
 - `MISTRAL_AI_API_KEY`: API key for Mistral (used for summaries)
@@ -113,38 +125,7 @@ Place CSV at:
 
 If you are using a different plan, update the RPM/RPD values to match your console limits.
 
-## Deployment (Free)
 
-## Option A: Streamlit Community Cloud
-
-1. Push this project to GitHub.
-2. Go to Streamlit Community Cloud.
-3. Deploy from repo with main file `app.py`.
-4. Add secret for API key if needed.
-
-## Option B: HuggingFace Spaces (Streamlit)
-
-1. Create new Streamlit Space.
-2. Upload project files.
-3. Ensure `requirements.txt` is present.
-4. Set API key in Space secrets.
-
-If hosting fails, provide a screen recording (<= 2 minutes) showing:
-
-- App startup
-- RSS article fetch
-- Category tabs
-- 3-line summaries
-- Newsletter generation
-
-## Deliverables Checklist
-
-- [x] Streamlit app code
-- [x] `requirements.txt`
-- [x] Training/evaluation notebook
-- [x] Report template
-- [ ] Live deployed link OR <=2 min demo recording
-- [ ] Final PDF report (6-8 pages, ICVGIP style)
 
 ## Notes and Limitations
 
@@ -152,3 +133,13 @@ If hosting fails, provide a screen recording (<= 2 minutes) showing:
 - Published timestamps from RSS providers may have inconsistent formats.
 - Zero-shot classification is flexible but not as precise as task-specific fine-tuning.
 - LLM summaries depend on API availability and prompt compliance.
+
+## NOTE:
+The L3Cube-IndicNews-style taxonomy contains 36 category labels. Because the app fetches only ~30 articles per refresh, most categories are empty; for clarity, the screenshots show only the 6 most common labels. To classify against all 36 labels, add the full label list to `labels.txt`. The demo video includes the full label set.
+
+## Assumptions
+
+- Single-label classification is used (argmax over the label set), not multi-label.
+- Headlines are classified using title + short RSS/CSV description, not full article bodies.
+- Articles outside the label set are forced into the closest available category.
+

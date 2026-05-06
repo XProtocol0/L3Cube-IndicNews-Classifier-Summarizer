@@ -51,9 +51,11 @@ ENV/
 
 #report
 report_template.md
-report_template.tex
-
+*/report/report_template.*
+report/report_template.pdf
 #data
 *.csv*
 *.xlsx
 .env
+cvpr.sty
+*.brf

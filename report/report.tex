@@ -1,40 +1,36 @@
-% ICVGIP-style technical report
+% ICVGIP-style technical report (uses the CVPR LaTeX class)
 % Compile with: pdflatex report.tex
 \documentclass[10pt,twocolumn,letterpaper]{article}
 
+\usepackage[final]{cvpr}      % camera-ready style; for review use [review]
 \usepackage{times}
+
+% Additional packages not already pulled in by cvpr.sty
 \usepackage{epsfig}
-\usepackage{graphicx}
-\usepackage{amsmath}
-\usepackage{amssymb}
-\usepackage{booktabs}
-\usepackage{url}
-\usepackage{hyperref}
-\usepackage{xcolor}
-\usepackage{caption}
 \usepackage{array}
-\usepackage[margin=0.85in]{geometry}
-\usepackage{authblk}
+\usepackage[pagebackref,breaklinks,colorlinks,citecolor=blue!60!black,linkcolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
 
-\hypersetup{
-    colorlinks=true,
-    linkcolor=blue!60!black,
-    urlcolor=blue!60!black,
-    citecolor=blue!60!black
-}
-
-\setlength{\columnsep}{0.25in}
-
-\title{\textbf{Personalised Newsletter Generator: \\ Zero-Shot Indian News Classification and LLM-Based Summarisation}}
-
-\author{Piyush Kumar Agarwal \\ \texttt{piyukr@gmail.com}}
-\date{}
+% CVPR papers do not get a number
+\def\cvprPaperID{****}
+\def\confName{ICVGIP}
+\def\confYear{2026}
 
 \begin{document}
-\maketitle
 
+%%%%%%%%% TITLE
+\title{Personalised Newsletter Generator: \\ Zero-Shot Indian News Classification and LLM-Based Summarisation}
+
+\author{KSPSVLN Siddardha Kumar Kavuri\\(2025201061)
+\and Piyush Kumar Agarwal\\(2025201082)
+\and Sankalp Chaturvedi\\(2025201083)
+\and Aviral Tyagi\\(2025201086)}
+
+\maketitle
+%\thispagestyle{empty}
+
+%%%%%%%%% ABSTRACT
 \begin{abstract}
-We present a personalised daily newsletter generator for Indian news consumers. The system ingests live RSS feeds from \textit{The Hindu}, \textit{NDTV}, and \textit{The Indian Express}; tags each article with one of six L3Cube-IndicNews-style categories using a zero-shot classifier built on \texttt{facebook/bart-large-mnli}; produces a three-line factual summary for each article using the free-tier Mistral \texttt{mistral-small} chat API; and finally assembles a category-filtered, recipient-personalised email digest. We evaluate the classifier on the full $5471$-headline filtered subset of the \textit{India Headlines} dataset and report a baseline accuracy of $0.7044$ and macro-F1 of $0.6903$ over six categories. We further conduct a prompt-tuning ablation across ten hypothesis templates and two label vocabularies, achieving a peak accuracy of $0.7428$ with a domain-anchored template (\textit{``This Indian news headline covers \{\}.''}) without retraining the underlying NLI model. The application is deployed as a Streamlit Space on Hugging Face.
+We present a personalised daily newsletter generator for Indian news consumers. The system ingests live RSS feeds from \textit{The Hindu}, \textit{NDTV}, and \textit{The Indian Express}; tags each article with one of six L3Cube-IndicNews-style categories using a zero-shot classifier built on \texttt{facebook/bart-large-mnli}; produces a three-line factual summary for each article using the free-tier Mistral \texttt{mistral-small} chat API; and finally assembles a category-filtered, recipient-personalised email digest. We evaluate the classifier on the full $5471$-headline filtered subset of the \textit{India Headlines} dataset and report a baseline accuracy of \textbf{0.7044} and macro-F1 of \textbf{0.6903} over six categories. We further conduct a prompt-tuning ablation across ten hypothesis templates and two label vocabularies, achieving a peak accuracy of \textbf{0.7428} with a domain-anchored template (\textit{``This Indian news headline covers \{\}.''}) without retraining the underlying NLI model. The application is deployed as a Streamlit Space on Hugging Face.
 \end{abstract}
 
 % ============================================================
@@ -54,9 +50,9 @@ This report describes such a pipeline, named the \emph{India Daily Briefing}. It
 \noindent\textbf{Contributions.} (1) We engineer an end-to-end Streamlit application that bridges feed-parsing, NLI-based zero-shot classification, and LLM summarisation under realistic free-tier rate limits. (2) We re-evaluate \texttt{bart-large-mnli} on Indian news headlines using L3Cube-IndicNews-aligned labels and report per-class metrics on the full $5471$-row evaluation corpus. (3) We present a ten-template prompt-tuning ablation that lifts accuracy by $+3.84$ percentage points (a $+5.5\%$ relative gain) over the most natural English baseline. The prompt search is the only ``training'' performed.
 
 \medskip
-\noindent\textbf{Live demo.} \url{https://huggingface.co/spaces/piyukr26/SMAI_A3} \\
-\textbf{Source code.} \url{https://github.com/XProtocol0/L3Cube-IndicNews-Classifier-Summarizer} \\
-\textbf{Demo video.} \texttt{[PLACEHOLDER -- to be added]}
+\noindent\textbf{Live demo.} \href{https://huggingface.co/spaces/piyukr26/SMAI_A3}{Hugging Face Space} \\
+\textbf{Source code.} \href{https://github.com/XProtocol0/L3Cube-IndicNews-Classifier-Summarizer}{GitHub Repository} \\
+\textbf{Demo video.} \href{https://drive.google.com/drive/folders/15FgeyxjyEIJubzcbA3jKG0MLjuL8n4sV?usp=sharing}{Google Drive Video}
 
 % ============================================================
 \section{Related Work}
@@ -113,7 +109,7 @@ Text is canonicalised by (i) HTML-entity decoding, (ii) tag stripping via a non-
 % ============================================================
 
 \subsection{System architecture}
-Figure~\ref{fig:arch} (placeholder) summarises the pipeline. The app is structured as a single-process Streamlit application with caching at three layers (\texttt{cache\_resource} for the heavy classifier, \texttt{cache\_data} for both feed fetches and summaries) so that repeated user interactions remain responsive.
+Figure~\ref{fig:arch} summarises the pipeline. The app is structured as a single-process Streamlit application with caching at three layers (\texttt{cache\_resource} for the heavy classifier, \texttt{cache\_data} for both feed fetches and summaries) so that repeated user interactions remain responsive.
 
 \begin{figure}[t]
 \centering
@@ -253,7 +249,7 @@ Figures~\ref{fig:home}--\ref{fig:csvdig2} show representative views of the live 
 \section{Ablation Study}
 \label{sec:ablation}
 % ============================================================
-The behaviour of an MNLI-based zero-shot classifier is highly sensitive to the wording of the hypothesis template $T(y)$. We therefore conduct a prompt-tuning ablation over ten templates that systematically vary along four axes: (i) the presence of a domain anchor (\textit{``Indian''}, \textit{``news''}); (ii) the entailment verb (\textit{``is about''} vs.\ \textit{``covers''}, \textit{``focuses on''}, \textit{``reports on''}); (iii) categorical framing (\textit{``belongs to the \{\} category''}, \textit{``filed under the \{\} section''}); and (iv) label vocabulary -- short labels vs.\ \emph{expanded} labels (e.g.\ \textit{``Technology''} $\rightarrow$ \textit{``science and technology''}). Templates \texttt{P8} and \texttt{P9} use the expanded vocabulary; predictions are mapped back to the canonical labels for a fair comparison. All other settings (model, $N{=}500$ test rows, single-label argmax) are held fixed.
+The behaviour of an MNLI-based zero-shot classifier is highly sensitive to the wording of the hypothesis template $T(y)$. We therefore conduct a prompt-tuning ablation over ten templates that systematically vary along four axes: (i) the presence of a domain anchor (\textit{``Indian''}, \textit{``news''}); (ii) the entailment verb (\textit{``is about''} vs.\ \textit{``covers''}, \textit{``focuses on''}, \textit{``reports on''}); (iii) categorical framing (\textit{``belongs to the \{\} category''}, \textit{``filed under the \{\} section''}); and (iv) label vocabulary -- short labels vs.\ \emph{expanded} labels (e.g.\ \textit{``Technology''} $\rightarrow$ \textit{``science and technology''}). Templates \texttt{P8} and \texttt{P9} use the expanded vocabulary; predictions are mapped back to the canonical labels for a fair comparison. All other settings (model, $N{=}5471$ test rows, single-label argmax) are held fixed.
 
 \begin{table}[t]
 \centering
@@ -335,11 +331,10 @@ We discuss what the offline notebook (\texttt{notebooks/training\_and\_ablation.
 We thank the maintainers of \texttt{facebook/bart-large-mnli} and the Hugging Face \texttt{transformers} library, the Mistral AI team for free API access to \texttt{mistral-small}, and the L3Cube-Pune group whose IndicNews label schema informed our category vocabulary. The evaluation corpus is derived from Rohit Kulkarni's \textit{India Headlines News Dataset} on Kaggle. We also acknowledge \textit{The Hindu}, \textit{NDTV}, and \textit{The Indian Express} for providing public RSS feeds that make a real-time prototype possible. This work was undertaken as part of the SMAI course assignment (Assignment 3).
 
 % ============================================================
-\section*{References}
-\label{sec:refs}
+% References
 % ============================================================
+{\small
 \begin{thebibliography}{9}
-\small
 
 \bibitem{lewis2020bart}
 M. Lewis, Y. Liu, N. Goyal, M. Ghazvininejad, A. Mohamed, O. Levy, V. Stoyanov, L. Zettlemoyer.
@@ -382,5 +377,6 @@ T. Wolf et al.
 \newblock \emph{EMNLP: System Demonstrations}, 2020.
 
 \end{thebibliography}
+}
 
 \end{document}

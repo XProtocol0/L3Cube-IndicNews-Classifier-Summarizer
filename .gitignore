@@ -54,4 +54,6 @@ report_template.md
 report_template.tex
 
 #data
-*.csv
+*.csv*
+*.xlsx
+.env

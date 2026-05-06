@@ -58,8 +58,10 @@ streamlit run app.py
 
 - Model: `facebook/bart-large-mnli`
 - Task: Zero-shot single-label classification
-- Candidate labels: `Politics`, `Sports`, `Technology`, `Business`, `Entertainment`
-- Display mapping: `Technology -> Tech`
+- Candidate labels:
+  - Defaults to `Politics`, `Sports`, `Technology`, `Business`, `Entertainment`
+  - If L3Cube-IndicNews dataset path is provided, labels are loaded from that file
+- Display mapping: `Technology -> Tech` (defaults only)
 
 ### Summarization
 
@@ -80,6 +82,8 @@ Implemented using Streamlit cache decorators:
 
 Open `notebooks/training_and_ablation.ipynb` and run all cells.
 
+Note: The Streamlit app does not use this dataset at runtime. It is only for offline evaluation and analysis.
+
 Notebook includes:
 
 - Dataset loading from Kaggle India headlines corpus
@@ -96,6 +100,16 @@ Place CSV at:
 - `data/india_news_headlines.csv`
 
 (adjust path/column names if your copy differs)
+
+## L3Cube-IndicNews Categories
+
+To use L3Cube-IndicNews categories for the app tabs and zero-shot classifier:
+
+1. Download the dataset locally.
+2. Provide its CSV path via the sidebar field "L3Cube dataset path" or set the env var `L3CUBE_DATA_PATH`.
+3. Ensure the CSV has a category column named `category`, `label`, or `topic`.
+
+If the file is missing or the category column cannot be found, the app falls back to the default 5 categories.
 
 ## Deployment (Free)
 

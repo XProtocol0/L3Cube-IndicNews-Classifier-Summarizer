@@ -2,7 +2,5 @@ Business
 Crime
 Entertainment
 Politics
-Science
 Sports
 Technology
-Finance

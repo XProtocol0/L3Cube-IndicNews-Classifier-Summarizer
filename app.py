@@ -1,7 +1,9 @@
 import html
 import json
 import os
+import random
 import re
+import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -14,9 +16,9 @@ from transformers import pipeline
 from dotenv import load_dotenv
 
 try:
-    from google import genai
+    import requests
 except ImportError:
-    genai = None
+    requests = None
 
 load_dotenv()
 
@@ -47,9 +49,15 @@ DEFAULT_CATEGORY_MAP = {
     "Entertainment": "Entertainment",
 }
 DEFAULT_TAB_ORDER = ["Politics", "Sports", "Tech", "Business", "Entertainment"]
-L3CUBE_DATA_ENV = "L3CUBE_DATA_PATH"
-L3CUBE_DEFAULT_PATH = "data/l3cube_indicnews.csv"
 LABELS_PATH = Path(__file__).resolve().parent / "labels.txt"
+MISTRAL_API_URL = os.getenv("MISTRAL_API_URL", "https://api.mistral.ai/v1/chat/completions")
+MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
+MISTRAL_RPM = int(os.getenv("MISTRAL_RPM", "10"))
+MISTRAL_RPD = int(os.getenv("MISTRAL_RPD", "1000"))
+MISTRAL_MIN_INTERVAL = 60.0 / max(MISTRAL_RPM, 1)
+_MISTRAL_LAST_CALL = 0.0
+_MISTRAL_DAY_KEY = ""
+_MISTRAL_DAY_COUNT = 0
 
 
 def _clean_text(text: str) -> str:
@@ -109,24 +117,6 @@ def _normalize_label(label: str) -> str:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_l3cube_categories(path: str) -> List[str]:
-    if not path:
-        return []
-    data_path = Path(path)
-    if not data_path.exists():
-        return []
-
-    df = pd.read_csv(data_path)
-    for col in ["category", "Category", "label", "Label", "topic", "Topic"]:
-        if col in df.columns:
-            series = df[col].dropna().astype(str).str.strip()
-            categories = [c for c in series.unique().tolist() if c]
-            return categories
-
-    return []
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
 def load_labels_file(path: str) -> List[str]:
     if not path:
         return []
@@ -137,7 +127,7 @@ def load_labels_file(path: str) -> List[str]:
     return [line for line in lines if line]
 
 
-def resolve_categories(l3cube_path: str, labels_path: str) -> Dict[str, object]:
+def resolve_categories(labels_path: str) -> Dict[str, object]:
     file_labels = load_labels_file(labels_path)
     if file_labels:
         label_map = {label: _normalize_label(label) for label in file_labels}
@@ -148,23 +138,11 @@ def resolve_categories(l3cube_path: str, labels_path: str) -> Dict[str, object]:
             "tab_order": tab_order,
             "source": "labels",
         }
-
-    l3cube_categories = load_l3cube_categories(l3cube_path)
-    if not l3cube_categories:
-        return {
-            "labels": DEFAULT_CATEGORIES,
-            "label_map": DEFAULT_CATEGORY_MAP,
-            "tab_order": DEFAULT_TAB_ORDER,
-            "source": "default",
-        }
-
-    label_map = {label: _normalize_label(label) for label in l3cube_categories}
-    tab_order = [label_map[label] for label in l3cube_categories]
     return {
-        "labels": l3cube_categories,
-        "label_map": label_map,
-        "tab_order": tab_order,
-        "source": "l3cube",
+        "labels": DEFAULT_CATEGORIES,
+        "label_map": DEFAULT_CATEGORY_MAP,
+        "tab_order": DEFAULT_TAB_ORDER,
+        "source": "default",
     }
 
 
@@ -364,6 +342,129 @@ def _extract_json_payload(text: str) -> str:
     return cleaned
 
 
+def _normalize_json_payload(text: str) -> str:
+    payload = _extract_json_payload(text)
+    if not payload:
+        return ""
+    payload = re.sub(r",\s*([}\]])", r"\1", payload)
+    out = []
+    in_string = False
+    escape = False
+    for ch in payload:
+        if in_string:
+            if escape:
+                out.append(ch)
+                escape = False
+                continue
+            if ch == "\\":
+                out.append(ch)
+                escape = True
+                continue
+            if ch == '"':
+                out.append(ch)
+                in_string = False
+                continue
+            if ch in ("\n", "\r"):
+                out.append("\\n")
+                continue
+            out.append(ch)
+        else:
+            out.append(ch)
+            if ch == '"':
+                in_string = True
+    return "".join(out)
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(
+        token in msg
+        for token in (
+            "429",
+            "rate limit",
+            "resource exhausted",
+            "too many requests",
+            "quota",
+        )
+    )
+
+
+def _check_mistral_rpd_limit():
+    global _MISTRAL_DAY_KEY, _MISTRAL_DAY_COUNT
+    if MISTRAL_RPD <= 0:
+        return
+    day_key = datetime.now(tz=timezone.utc).date().isoformat()
+    if _MISTRAL_DAY_KEY != day_key:
+        _MISTRAL_DAY_KEY = day_key
+        _MISTRAL_DAY_COUNT = 0
+    if _MISTRAL_DAY_COUNT >= MISTRAL_RPD:
+        raise RuntimeError(
+            "Mistral daily quota reached. Reduce requests or set MISTRAL_RPD for your tier."
+        )
+    _MISTRAL_DAY_COUNT += 1
+
+
+def _throttle_mistral():
+    global _MISTRAL_LAST_CALL
+    if MISTRAL_RPM <= 0:
+        raise RuntimeError(
+            "Mistral RPM is set to 0. Set MISTRAL_RPM or update MISTRAL_MODEL."
+        )
+    _check_mistral_rpd_limit()
+    now = time.monotonic()
+    wait_for = MISTRAL_MIN_INTERVAL - (now - _MISTRAL_LAST_CALL)
+    if wait_for > 0:
+        time.sleep(wait_for)
+    _MISTRAL_LAST_CALL = time.monotonic()
+
+
+def _mistral_chat_completion(api_key: str, prompt: str) -> str:
+    if requests is None:
+        raise RuntimeError("Mistral summaries are not available. Install requests.")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": MISTRAL_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are an editor for an Indian daily news briefing app.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+    }
+    response = requests.post(
+        MISTRAL_API_URL,
+        headers=headers,
+        data=json.dumps(payload),
+        timeout=90,
+    )
+    if not response.ok:
+        raise RuntimeError(f"Mistral API error {response.status_code}: {response.text}")
+    data = response.json()
+    try:
+        return data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("Mistral API response missing content.") from exc
+
+
+def _mistral_generate_with_backoff(api_key: str, prompt: str, max_retries: int = 5):
+    for attempt in range(max_retries):
+        _throttle_mistral()
+        try:
+            return _mistral_chat_completion(api_key, prompt)
+        except Exception as exc:
+            if not _is_rate_limit_error(exc):
+                raise
+            if attempt == max_retries - 1:
+                raise
+            backoff = (2 ** attempt) + random.uniform(0.2, 0.8)
+            time.sleep(backoff)
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def summarize_articles_batch(
     articles: List[Dict],
@@ -372,11 +473,11 @@ def summarize_articles_batch(
 ) -> List[str]:
     if not articles:
         return []
-    if not api_key or genai is None:
+    if not api_key or requests is None:
         if require_llm:
             raise RuntimeError(
-                "Gemini summaries are not available. Check your API key and "
-                "ensure google-genai is installed."
+                "Mistral summaries are not available. Check your API key and "
+                "ensure requests is installed."
             )
         return [
             _fallback_summary(article.get("description", "") or article.get("title", ""))
@@ -385,19 +486,18 @@ def summarize_articles_batch(
 
     items = []
     for idx, article in enumerate(articles, start=1):
+        details = article.get("description", "") or article.get("title", "")
         items.append(
             {
                 "id": idx,
                 "title": article.get("title", ""),
-                "details": article.get("description", ""),
+                "details": details,
             }
         )
 
     try:
-        client = genai.Client(api_key=api_key)
         payload = json.dumps(items, ensure_ascii=True)
         prompt = (
-            "You are an editor for an Indian daily news briefing app. "
             "For each item, summarize the news article in exactly 3 concise lines in plain text, "
             "no bullets, no numbering. Each line should be <= 22 words and fact-focused. "
             "Return ONLY a JSON array of objects with keys 'id' and 'summary'. "
@@ -405,12 +505,10 @@ def summarize_articles_batch(
             "Keep the same order and ids.\n\n"
             f"Items: {payload}"
         )
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-        text = response.text if response and response.text else ""
-        json_text = _extract_json_payload(text)
+        text = _mistral_generate_with_backoff(api_key, prompt)
+        json_text = _normalize_json_payload(text)
+        if not json_text:
+            raise ValueError("Empty JSON payload from Mistral response.")
         data = json.loads(json_text)
 
         summaries_by_id = {}
@@ -436,7 +534,7 @@ def summarize_articles_batch(
     except Exception as exc:
         if require_llm:
             raise RuntimeError(
-                f"Gemini batch summary failed. Please verify your API key and quota. ({exc})"
+                f"Mistral batch summary failed. Please verify your API key and quota. ({exc})"
             ) from exc
         return [
             _fallback_summary(article.get("description", "") or article.get("title", ""))
@@ -451,33 +549,29 @@ def summarize_article(
     api_key: str,
     require_llm: bool = False,
 ) -> str:
-    context = f"Title: {title}\nDetails: {description}"
-    if not api_key or genai is None:
+    details = description or title
+    context = f"Title: {title}\nDetails: {details}"
+    if not api_key or requests is None:
         if require_llm:
             raise RuntimeError(
-                "Gemini summaries are not available. Check your API key and "
-                "ensure google-genai is installed."
+                "Mistral summaries are not available. Check your API key and "
+                "ensure requests is installed."
             )
         return _fallback_summary(description or title)
 
     try:
-        client = genai.Client(api_key=api_key)
         prompt = (
-            "You are an editor for an Indian daily briefing app. "
             "Write exactly 3 concise lines in plain text, no bullets, no numbering. "
             "Each line should be <= 22 words and fact-focused.\n\n"
             f"{context}"
         )
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-        text = _clean_summary_text(response.text if response and response.text else "")
+        text = _mistral_generate_with_backoff(api_key, prompt)
+        text = _clean_summary_text(text)
         return text if text else _fallback_summary(description or title)
     except Exception as exc:
         if require_llm:
             raise RuntimeError(
-                f"Gemini summary failed. Please verify your API key and quota. ({exc})"
+                f"Mistral summary failed. Please verify your API key and quota. ({exc})"
             ) from exc
         return _fallback_summary(description or title)
 
@@ -518,21 +612,20 @@ def build_newsletter_with_llm(
     recipient_name: str,
     tone: str,
     max_articles: int,
+    force_llm: bool = True,
 ) -> str:
-    if not api_key or genai is None:
+    if not api_key or requests is None:
         return build_newsletter_fallback(recipient_name, selected_articles, max_articles)
 
     try:
+        batch_articles = selected_articles[:max_articles]
+        summaries = summarize_articles_batch(
+            batch_articles,
+            api_key,
+            require_llm=True,
+        )
         enriched_articles = []
-        for article in selected_articles[:max_articles]:
-            summary = article.get("summary", "").strip()
-            if not summary:
-                summary = summarize_article(
-                    article.get("title", ""),
-                    article.get("description", ""),
-                    api_key,
-                    require_llm=True,
-                )
+        for article, summary in zip(batch_articles, summaries):
             enriched = dict(article)
             enriched["summary"] = summary
             enriched_articles.append(enriched)
@@ -549,7 +642,12 @@ def render_article_card(article: Dict):
         f"Source: {article['source']} | Published: {article.get('published', 'N/A')} | "
         f"Zero-shot confidence: {article['confidence']:.2f}"
     )
-    st.write(article.get("summary", "Summary unavailable."))
+    summary = (article.get("summary") or "").strip()
+    if not summary:
+        summary = _fallback_summary(
+            article.get("description", "") or article.get("title", "")
+        )
+    st.write(summary)
 
 
 def main():
@@ -562,22 +660,14 @@ def main():
         st.header("Configuration")
         if "article_source" not in st.session_state:
             st.session_state.article_source = "rss"
-        api_key = st.text_input(
-            "Gemini API Key (optional)",
-            value=os.getenv("GEMINI_API_KEY", ""),
+        user_api_key = st.text_input(
+            "Mistral API Key (optional)",
+            value="",
             type="password",
-            help="Used for 3-line summaries and personalized newsletter generation.",
-        )
-        api_key = api_key.strip()
+            help="Optional. If left blank, the server environment key is used (if set).",
+        ).strip()
+        api_key = user_api_key or os.getenv("MISTRAL_AI_API_KEY", "").strip()
         article_limit = st.slider("Articles per refresh", min_value=10, max_value=50, value=30, step=5)
-        l3cube_path = st.text_input(
-            "L3Cube dataset path (optional)",
-            value=os.getenv(L3CUBE_DATA_ENV, L3CUBE_DEFAULT_PATH),
-            help=(
-                "If provided, categories are loaded from the L3Cube-IndicNews dataset file. "
-                "Expected columns: category/label/topic."
-            ),
-        )
         st.subheader("News Source")
         uploaded_csv = st.file_uploader(
             "Local CSV file",
@@ -620,7 +710,7 @@ def main():
         return
 
     classifier = load_classifier()
-    category_config = resolve_categories(l3cube_path, str(LABELS_PATH))
+    category_config = resolve_categories(str(LABELS_PATH))
     category_labels = category_config["labels"]
     label_map = category_config["label_map"]
     tab_order = category_config["tab_order"]
@@ -633,20 +723,6 @@ def main():
 
     with st.spinner("Classifying articles with BART MNLI..."):
         articles = classify_articles(articles, classifier, category_labels, label_map)
-
-    with st.spinner("Generating 3-line summaries..."):
-        try:
-            require_llm = bool(api_key)
-            summaries = summarize_articles_batch(
-                articles,
-                api_key,
-                require_llm=require_llm,
-            )
-            for article, summary in zip(articles, summaries):
-                article["summary"] = summary
-        except RuntimeError as exc:
-            st.error(str(exc))
-            return
 
     grouped = {k: [] for k in tab_order}
     for article in articles:
@@ -685,10 +761,16 @@ def main():
                 recipient_name,
                 tone,
                 max_articles=article_limit,
+                force_llm=True,
             )
-            st.text_area("Generated Digest", value=digest, height=320)
         except RuntimeError as exc:
-            st.error(str(exc))
+            st.warning(str(exc))
+            digest = build_newsletter_fallback(
+                recipient_name,
+                selected_articles,
+                max_articles=article_limit,
+            )
+        st.text_area("Generated Digest", value=digest, height=320)
 
 
 if __name__ == "__main__":

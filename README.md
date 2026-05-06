@@ -15,7 +15,7 @@ Streamlit app that fetches live Indian news from RSS, classifies each article in
   - Tech
   - Business
   - Entertainment
-- 3-line article summaries using Gemini 1.5 Flash (with fallback summarizer)
+- 3-line article summaries using Mistral API (with fallback summarizer)
 - Personalized newsletter generator (email style digest)
 - Streamlit caching for faster repeated loads
 
@@ -39,12 +39,13 @@ Use your preferred Python environment. If you already use a conda environment, a
 pip install -r requirements.txt
 ```
 
-### 3) Configure Gemini API key (optional but recommended)
+### 3) Configure Mistral API key (optional but recommended)
 
-- Get a free API key from Google AI Studio.
-- In the app sidebar, paste the key in `Gemini API Key`.
+- Get an API key from the Mistral console.
+- In the app sidebar, paste the key in `Mistral API Key`.
+- Or set `MISTRAL_AI_API_KEY` in your environment.
 
-Without key, the app still works and uses a lightweight fallback summarizer.
+Without a key, the app still works and uses a lightweight fallback summarizer.
 
 ### 4) Run app
 
@@ -60,14 +61,15 @@ streamlit run app.py
 - Task: Zero-shot single-label classification
 - Candidate labels:
   - Defaults to `Politics`, `Sports`, `Technology`, `Business`, `Entertainment`
-  - If L3Cube-IndicNews dataset path is provided, labels are loaded from that file
+  - If `labels.txt` exists, labels are loaded from that file
 - Display mapping: `Technology -> Tech` (defaults only)
 
 ### Summarization
 
-- Model/API: Gemini 1.5 Flash
+- Model/API: Mistral chat completions
 - Prompt constraint: exactly 3 concise lines
 - Fallback: sentence-based heuristic summarizer
+- Batch mode: all selected articles are summarized in a single request for the email digest
 
 ## Caching
 
@@ -101,15 +103,15 @@ Place CSV at:
 
 (adjust path/column names if your copy differs)
 
-## L3Cube-IndicNews Categories
+## Environment Variables
 
-To use L3Cube-IndicNews categories for the app tabs and zero-shot classifier:
+- `MISTRAL_AI_API_KEY`: API key for Mistral (used for summaries)
+- `MISTRAL_MODEL`: model name (default: `mistral-small-latest`)
+- `MISTRAL_API_URL`: override API base URL if needed
+- `MISTRAL_RPM`: requests per minute limit for throttling (default: 10)
+- `MISTRAL_RPD`: requests per day limit for throttling (default: 1000)
 
-1. Download the dataset locally.
-2. Provide its CSV path via the sidebar field "L3Cube dataset path" or set the env var `L3CUBE_DATA_PATH`.
-3. Ensure the CSV has a category column named `category`, `label`, or `topic`.
-
-If the file is missing or the category column cannot be found, the app falls back to the default 5 categories.
+If you are using a different plan, update the RPM/RPD values to match your console limits.
 
 ## Deployment (Free)
 

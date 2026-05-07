@@ -16,6 +16,7 @@ Streamlit app that fetches live Indian news from RSS, classifies each article in
   - Politics
   - Sports
   - Technology
+- (6 Major Common Classes included if want to run for L3Cube Categories provided in L3Cube_labels.txt)
 - 3-line article summaries using Mistral API (with fallback summarizer)
 - Personalized newsletter generator (email style digest)
 - Local CSV upload mode with flexible column mapping
